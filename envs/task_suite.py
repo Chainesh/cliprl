@@ -23,6 +23,10 @@ import gymnasium as gym
 from gymnasium import spaces
 from typing import Tuple, Dict, Any, Optional
 import sys, os
+
+# CRITICAL FIX: Import to register BabyAI environments with gymnasium
+import minigrid.envs.babyai
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.config import OBS_DIM, OBS_IMAGE_DIM, ACTION_DIM, BASE_TASKS, TARGET_TASKS
 
