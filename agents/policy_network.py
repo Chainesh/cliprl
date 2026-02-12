@@ -123,7 +123,8 @@ class PolicyNetwork(nn.Module):
         Returns:
             action: int in [0, 6]
         """
-        obs_t = torch.FloatTensor(obs).unsqueeze(0)  # (1, 148)
+        device = next(self.parameters()).device             # wherever model lives
+        obs_t = torch.FloatTensor(obs).unsqueeze(0).to(device)  # follows the model  # (1, 148)
         with torch.no_grad():
             logits, _ = self.forward(obs_t)
             if deterministic:

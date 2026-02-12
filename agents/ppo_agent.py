@@ -19,6 +19,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.distributions import Categorical
 from typing import Optional, Tuple, List, Dict
 import os, sys, time, pickle
@@ -317,7 +318,7 @@ class PPOAgent:
                 total_entropy     += entropy.item()
                 n_updates         += 1
 
-        import torch.nn.functional as F
+        
         return {
             "policy_loss": total_policy_loss / n_updates,
             "value_loss":  total_value_loss  / n_updates,
@@ -514,7 +515,7 @@ def train_all_base_tasks(
 # ─── Main (smoke test — single short training run) ────────────────────────────
 
 if __name__ == "__main__":
-    import torch.nn.functional as F
+    # import torch.nn.functional as F
 
     print("Quick smoke test — 5000 steps on GoToRedBall...")
 
