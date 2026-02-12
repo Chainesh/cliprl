@@ -123,7 +123,7 @@ class LanguageEncoder(nn.Module):
 
         # Get frozen SBERT features
         sbert_emb = self._get_sbert_embedding(instructions, device)  # (N, 384)
-
+        sbert_emb = sbert_emb.detach().clone() 
         # Project into shared space
         projected = self.projection(sbert_emb)   # (N, 128)
 

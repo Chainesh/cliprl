@@ -15,7 +15,7 @@ import torch.nn.functional as F
 import numpy as np
 import os, sys
 from typing import List, Dict, Optional, Tuple
-
+from sentence_transformers import SentenceTransformer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.policy_network import PolicyNetwork, weighted_average_init
@@ -185,7 +185,6 @@ def initialize_top1_language(
     Hard assignment: just use the single most similar policy (no averaging).
     Useful as a comparison to understand if averaging helps.
     """
-    from sentence_transformers import SentenceTransformer
 
     sbert = SentenceTransformer("all-MiniLM-L6-v2")
     with torch.no_grad():
