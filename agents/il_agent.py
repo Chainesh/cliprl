@@ -33,7 +33,7 @@ from agents.recurrent_policy import (
 from trajectory.bot_collector import (
     Demos, load_demos, demos_to_sequences, demos_exist
 )
-from utils.il_config import IL, RECURRENT_POLICY, CHECKPOINTS
+from utils.il_config import IL, RECURRENT_POLICY, CHECKPOINTS, get_stage_demo_count
 
 
 # ─── IL Agent ────────────────────────────────────────────────────────────────
@@ -118,18 +118,6 @@ class ILAgent:
     ) -> Dict:
         """
         Train the policy via behavioral cloning on bot demonstrations.
-
-        Args:
-            demos:      list of episodes from bot_collector
-            epochs:     max training epochs
-            lr:         Adam learning rate
-            batch_size: sequences per batch
-            seq_len:    TBPTT truncation length
-            val_split:  fraction held out for validation
-            patience:   early stopping patience
-
-        Returns:
-            dict with training history
         """
         if self.verbose:
             print(f"\n{'='*60}")
@@ -139,7 +127,8 @@ class ILAgent:
             print(f"{'='*60}\n")
 
         # ── Build sequences ────────────────────────────────────────────────────
-        train_obs, train_act, val_obs, val_act = demos_to_sequences(
+        # CHANGED: Now returns 6 values instead of 4
+        train_obs, train_act, train_len, val_obs, val_act, val_len = demos_to_sequences(
             demos, seq_len=seq_len, val_split=val_split
         )
 
@@ -148,14 +137,15 @@ class ILAgent:
             print(f"  Val sequences:   {val_obs.shape[0]:,}\n")
 
         # ── DataLoaders ────────────────────────────────────────────────────────
+        # CHANGED: Include lengths in datasets
         train_loader = DataLoader(
-            TensorDataset(train_obs, train_act),
+            TensorDataset(train_obs, train_act, train_len),  # ← Added train_len
             batch_size = batch_size,
             shuffle    = True,
             pin_memory = (self.device.type == "cuda"),
         )
         val_loader = DataLoader(
-            TensorDataset(val_obs, val_act),
+            TensorDataset(val_obs, val_act, val_len),  # ← Added val_len
             batch_size = batch_size * 2,
             shuffle    = False,
         )
@@ -171,9 +161,8 @@ class ILAgent:
         )
 
         # ── Expand tokens to batch size ────────────────────────────────────────
-        # Instruction is the same for every sequence in this task
         def expand_tokens(b: int) -> torch.Tensor:
-            return self.tokens.expand(b, -1)   # (B, 20)
+            return self.tokens.expand(b, -1)
 
         # ── Training loop ─────────────────────────────────────────────────────
         no_improve = 0
@@ -189,9 +178,11 @@ class ILAgent:
             epoch_loss = 0.0
             n_batches  = 0
 
-            for obs_batch, act_batch in train_loader:
-                obs_batch = obs_batch.to(self.device)   # (B, T, 148)
-                act_batch = act_batch.to(self.device)   # (B, T)
+            # CHANGED: Unpack 3 values instead of 2
+            for obs_batch, act_batch, len_batch in train_loader:
+                obs_batch = obs_batch.to(self.device)
+                act_batch = act_batch.to(self.device)
+                len_batch = len_batch.to(self.device)  # ← New (for future use)
                 B = obs_batch.shape[0]
 
                 # Zero hidden state at the start of each sequence chunk
@@ -200,7 +191,7 @@ class ILAgent:
                 # Forward
                 logits, _, _ = self.policy(
                     obs_batch, expand_tokens(B), hidden
-                )   # (B, T, 7)
+                )
 
                 # Cross-entropy over all (B*T) action predictions
                 loss = nn.functional.cross_entropy(
@@ -268,6 +259,9 @@ class ILAgent:
             "best_val_loss": self.best_val_loss,
         }
 
+
+    # ─── CHANGE 2: _validate method ──────────────────────────────────────────────
+
     def _validate(
         self,
         val_loader: DataLoader,
@@ -280,9 +274,11 @@ class ILAgent:
         total_tokens  = 0
 
         with torch.no_grad():
-            for obs_batch, act_batch in val_loader:
+            # CHANGED: Unpack 3 values instead of 2
+            for obs_batch, act_batch, len_batch in val_loader:
                 obs_batch = obs_batch.to(self.device)
                 act_batch = act_batch.to(self.device)
+                len_batch = len_batch.to(self.device)  # ← New (for future use)
                 B = obs_batch.shape[0]
 
                 hidden = self.policy.init_hidden(B, self.device)
@@ -400,7 +396,7 @@ class ILAgent:
 
 def train_il_stage(
     stage_idx:   int,
-    n_demos:     int   = 10_000,
+    n_demos:     Optional[int] = None,
     device:      str   = "auto",
     large_model: bool  = False,
     skip_existing: bool = True,
@@ -410,7 +406,7 @@ def train_il_stage(
 
     Args:
         stage_idx:    which stage from CURRICULUM_STAGES to train
-        n_demos:      demos per task (collected from bot if not cached)
+        n_demos:      demos per task override (None => per-stage from config)
         device:       cpu or cuda
         large_model:  use 2048-dim GRU (needed for BossLevel)
         skip_existing: skip if IL checkpoint already exists
@@ -419,7 +415,7 @@ def train_il_stage(
         dict of {task_id: ILAgent}
     """
     from utils.il_config import CURRICULUM_STAGES, ALL_IL_TASKS
-    from trajectory.bot_collector import collect_bot_demos, save_demos, load_demos
+    from trajectory.bot_collector import collect_bot_demos, save_demos
 
     def make_task_id(env_id, instruction):
         env_short  = env_id.replace("BabyAI-", "").replace("-v0", "")
@@ -429,6 +425,7 @@ def train_il_stage(
     stage_tasks      = CURRICULUM_STAGES[stage_idx]
     all_instructions = [instr for _, instr in ALL_IL_TASKS]
     agents           = {}
+    demos_per_task   = n_demos if n_demos is not None else get_stage_demo_count(stage_idx)
 
     print(f"\n{'='*60}")
     print(f"  IL Stage {stage_idx}  |  {len(stage_tasks)} tasks  |  device={device}")
@@ -444,10 +441,21 @@ def train_il_stage(
         else:
             # Collect demos if not cached
             if demos_exist(task_id):
-                demos = load_demos(task_id)
+                demos, _missions = load_demos(task_id)
+                if len(demos) < demos_per_task:
+                    demos, missions = collect_bot_demos(
+                        env_id=env_id,
+                        n_episodes=demos_per_task,
+                        extract_missions=True,
+                    )
+                    save_demos(demos, task_id, missions)
             else:
-                demos = collect_bot_demos(env_id, n_episodes=n_demos)
-                save_demos(demos, task_id)
+                demos, missions = collect_bot_demos(
+                    env_id=env_id,
+                    n_episodes=demos_per_task,
+                    extract_missions=True,
+                )
+                save_demos(demos, task_id, missions)
 
             agent = ILAgent(
                 env_id           = env_id,

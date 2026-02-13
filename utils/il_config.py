@@ -21,40 +21,38 @@ os.makedirs(CHECKPOINTS, exist_ok=True)
 # Format: (env_id, instruction, stage_idx)
 
 CURRICULUM_STAGES = [
-    # Stage 0 — pure navigation, single room
+    # Stage 0 - Navigation
     [
-        ("BabyAI-GoToRedBall-v0",        "go to the red ball"),
-        ("BabyAI-GoToRedBallNoDists-v0", "go to the red ball with no distractors"),
-        ("BabyAI-GoToObj-v0",            "go to the blue box"),
-        ("BabyAI-GoToLocal-v0",          "go to the green key"),
+        ("BabyAI-GoToObj-v0", "go to the blue ball"),   # mean=5.0 steps
+        ("BabyAI-GoToObj-v0", "go to the blue key"),    # mean=5.0 steps
+        ("BabyAI-GoToObj-v0", "go to the grey key"),    # mean=5.2 steps
+        ("BabyAI-GoToObj-v0", "go to the purple ball"), # mean=6.0 steps
+        ("BabyAI-GoToObj-v0", "go to the purple box"),  # mean=8.0 steps
+        ("BabyAI-GoToObj-v0", "go to the purple key"),  # mean=7.5 steps
+        ("BabyAI-GoToObj-v0", "go to the red box"),     # mean=6.0 steps
+        ("BabyAI-GoToObj-v0", "go to the yellow box"),  # mean=8.0 steps
     ],
-    # Stage 1 — doors, multi-object, slightly larger rooms
+    # Stage 1 - Easy door interactions
     [
-        ("BabyAI-GoToDoor-v0",           "go to the blue door"),
-        ("BabyAI-OpenRedDoor-v0",        "open the red door"),
-        ("BabyAI-Open-v0",               "open the door"),
-        ("BabyAI-OpenDoor-v0",           "open the door on your left"),
+        ("BabyAI-Open-v0", "open a red door"),                # mean=9.0 steps
+        ("BabyAI-Open-v0", "open the red door"),              # mean=7.3 steps
+        ("BabyAI-OpenDoor-v0", "open the door on your left"), # mean=7.4 steps
     ],
-    # Stage 2 — keys + locked doors
+    # Stage 2 - Medium door interactions
     [
-        ("BabyAI-Unlock-v0",             "open the locked door"),
-        ("BabyAI-UnlockLocal-v0",        "open the locked door in this room"),
-        ("BabyAI-KeyInBox-v0",           "use the key to open the box"),
+        ("BabyAI-Open-v0", "open a green door"),   # mean=23.3 steps
+        ("BabyAI-Open-v0", "open a grey door"),    # mean=18.6 steps
+        ("BabyAI-Open-v0", "open a purple door"),  # mean=24.0 steps
+        ("BabyAI-Open-v0", "open a yellow door"),  # mean=27.5 steps
+        ("BabyAI-Open-v0", "open the door"),       # mean=30.5 steps
+        ("BabyAI-Open-v0", "open the purple door"),# mean=26.0 steps
+        ("BabyAI-Open-v0", "open a blue door"),    # mean=31.2 steps
     ],
-    # Stage 3 — pick-and-place, object manipulation
+    # Stage 3 - Hard door interactions
     [
-        ("BabyAI-PickupLoc-v0",          "pick up the ball in front of you"),
-        ("BabyAI-PutNextLocal-v0",       "put the ball next to the key"),
-        ("BabyAI-PutNextS5N3-v0",        "put the red ball next to the blue key"),
-    ],
-    # Stage 4 — sequential / compositional
-    [
-        ("BabyAI-GoToSeqS5R2-v0",        "go to a red door then go to a blue ball"),
-        ("BabyAI-SynthS5R2-v0",          "pick up the red ball after opening the door"),
-    ],
-    # Stage 5 — BossLevel: everything combined
-    [
-        ("BabyAI-BossLevel-v0",          "boss level task"),
+        ("BabyAI-Open-v0", "open the blue door"),  # mean=65.0 steps
+        ("BabyAI-Open-v0", "open the green door"), # mean=65.7 steps
+        ("BabyAI-Open-v0", "open the grey door"),  # mean=78.0 steps
     ],
 ]
 
@@ -65,11 +63,22 @@ ALL_IL_TASKS = [task for stage in CURRICULUM_STAGES for task in stage]
 # ─── Bot demo collection ──────────────────────────────────────────────────────
 
 BOT_DEMOS = dict(
-    n_episodes     = 10_000,   # demos per task for IL pretraining
+    n_episodes     = 10_000,   # fallback demos per task
+    n_episodes_by_stage = {
+        0: 5_000,
+        1: 10_000,
+        2: 15_000,
+        3: 20_000,
+    },
     max_steps      = 256,      # max steps per episode
     save_every     = 1_000,    # checkpoint demos every N episodes
     timeout        = 30,       # seconds before giving up on one episode
 )
+
+
+def get_stage_demo_count(stage_idx: int) -> int:
+    """Return demos per task for a stage, with fallback to global default."""
+    return BOT_DEMOS["n_episodes_by_stage"].get(stage_idx, BOT_DEMOS["n_episodes"])
 
 
 # ─── Recurrent Policy Architecture ───────────────────────────────────────────

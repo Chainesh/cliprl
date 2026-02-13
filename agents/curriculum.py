@@ -32,14 +32,16 @@ import os, sys, time
 import numpy as np
 from typing import Dict, Optional, List
 from copy import deepcopy
-
+import gymnasium as gym
+from envs.task_suite import FlatObsWrapper
+from torch.distributions import Categorical
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.recurrent_policy import RecurrentPolicy, build_vocab, tokenize_batch
 from agents.il_agent import ILAgent
 from utils.il_config import (
     CURRICULUM_STAGES, ALL_IL_TASKS, CURRICULUM, IL, RL_FINETUNE,
-    CHECKPOINTS, BOT_DEMOS,
+    CHECKPOINTS, get_stage_demo_count,
 )
 
 
@@ -145,20 +147,11 @@ class CurriculumManager:
         warm_start:   bool = CURRICULUM["warm_start"],
         rl_finetune:  bool = False,
     ) -> Dict:
-        """
-        Train all tasks in a given stage.
-
-        Args:
-            stage_idx:   which stage to train (0 = simplest, 5 = BossLevel)
-            warm_start:  initialize from previous stage checkpoint
-            rl_finetune: run PPO fine-tune after IL (recommended for hard stages)
-
-        Returns:
-            dict of {task_id: success_rate}
-        """
+        """Train all tasks in a given stage."""
         from trajectory.bot_collector import collect_bot_demos, save_demos, load_demos, demos_exist
 
         stage_tasks = CURRICULUM_STAGES[stage_idx]
+        stage_demo_target = get_stage_demo_count(stage_idx)
         results     = {}
 
         print(f"\n{'='*65}")
@@ -173,17 +166,45 @@ class CurriculumManager:
             print(f"  Instruction: '{instruction}'")
 
             # ── Collect demos ──────────────────────────────────────────────────
+            # CHANGED: Now returns tuple (demos, missions)
             if demos_exist(task_id):
                 print(f"  Loading cached demos...")
-                demos = load_demos(task_id)
+                demos, missions = load_demos(task_id)  # ← Returns tuple now
+                if len(demos) < stage_demo_target:
+                    print(
+                        f"  Cached demos ({len(demos)}) below stage target "
+                        f"({stage_demo_target}), recollecting..."
+                    )
+                    demos, missions = collect_bot_demos(
+                        env_id     = env_id,
+                        n_episodes = stage_demo_target,
+                        verbose    = self.verbose,
+                        extract_missions = True,
+                    )
+                    save_demos(demos, task_id, missions)
+                
+                # Verify mission consistency
+                if missions:
+                    unique_missions = set(missions)
+                    if len(unique_missions) > 1:
+                        print(f"  ⚠ WARNING: Variable missions detected!")
+                        print(f"     Found {len(unique_missions)} different missions")
+                        print(f"     Consider splitting into separate tasks")
+                    elif len(unique_missions) == 1:
+                        actual_mission = missions[0]
+                        if actual_mission != instruction:
+                            print(f"  ℹ Mission from demos: '{actual_mission}'")
+                            print(f"    Config has:         '{instruction}'")
             else:
-                print(f"  Collecting {BOT_DEMOS['n_episodes']} bot demos...")
-                demos = collect_bot_demos(
+                print(f"  Collecting {stage_demo_target} bot demos...")
+                # CHANGED: Now returns tuple (demos, missions)
+                demos, missions = collect_bot_demos(
                     env_id     = env_id,
-                    n_episodes = BOT_DEMOS["n_episodes"],
+                    n_episodes = stage_demo_target,
                     verbose    = self.verbose,
+                    extract_missions = True,  # ← Enable mission extraction
                 )
-                save_demos(demos, task_id)
+                save_demos(demos, task_id, missions)  # ← Pass missions
 
             # ── Create agent ───────────────────────────────────────────────────
             from utils.il_config import RECURRENT_POLICY
@@ -193,10 +214,19 @@ class CurriculumManager:
                 RECURRENT_POLICY["memory_dim"]
             )
 
+            # CHANGED: Use actual mission from demos if available
+            actual_instruction = instruction  # Default to config
+            if missions:
+                actual_instruction = missions[0]  # Use actual mission
+                
+                # Warn if there's a mismatch
+                if instruction != actual_instruction:
+                    print(f"  ℹ Using actual mission: '{actual_instruction}'")
+
             agent = ILAgent(
                 env_id           = env_id,
                 task_id          = task_id,
-                instruction      = instruction,
+                instruction      = actual_instruction,  # ← Use actual mission
                 all_instructions = self.all_instructions,
                 large_model      = self.large_model,
                 device           = self.device,
@@ -225,7 +255,7 @@ class CurriculumManager:
             print(f"\n  [{task_id}]  Success rate: {sr*100:.1f}%")
             if sr < CURRICULUM["success_threshold"]:
                 print(f"  ⚠  Below threshold ({CURRICULUM['success_threshold']*100:.0f}%) "
-                      f"— consider more demos or longer training")
+                    f"— consider more demos or longer training")
             else:
                 print(f"  ✓  Passed threshold")
 
@@ -233,7 +263,6 @@ class CurriculumManager:
             results[task_id] = metrics
 
         # Save a single "stage complete" checkpoint using the last task's policy
-        # (all tasks share the same arch — use the last one as the warm-start for next stage)
         self._save_stage(stage_idx, agent.policy)
         self.stage_results[stage_idx] = results
         return results
@@ -251,9 +280,6 @@ class CurriculumManager:
         The IL policy is used as initialization — PPO then improves it
         using actual env rewards.
         """
-        import gymnasium as gym
-        from envs.task_suite import FlatObsWrapper
-        from torch.distributions import Categorical
 
         if self.verbose:
             print(f"\n  PPO fine-tuning for {instruction}...")

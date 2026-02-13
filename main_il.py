@@ -67,7 +67,7 @@ def phase_transfer(n_seeds, device):
 
 # ─── IL phases ────────────────────────────────────────────────────────────────
 
-def phase_collect_demos(n_demos: int, stage: Optional[int] = None):
+def phase_collect_demos(n_demos: Optional[int], stage: Optional[int] = None):
     """Collect bot demonstrations for all tasks (or one stage)."""
     from trajectory.bot_collector import collect_all_demos
     collect_all_demos(
@@ -82,7 +82,7 @@ def phase_il_train(
     stage:      int,
     device:     str,
     large:      bool = False,
-    n_demos:    int  = 10_000,
+    n_demos:    Optional[int] = None,
 ):
     """Train IL (behavioral cloning) on one curriculum stage."""
     from agents.il_agent import train_il_stage
@@ -227,8 +227,8 @@ if __name__ == "__main__":
     # IL flags
     parser.add_argument("--stage",     type=int,   default=0,
                         help="Curriculum stage index (0-5)")
-    parser.add_argument("--n_demos",   type=int,   default=10_000,
-                        help="Bot demos per task")
+    parser.add_argument("--n_demos",   type=int,   default=None,
+                        help="Bot demos per task override (default: per-stage from il_config)")
     parser.add_argument("--large",     action="store_true",
                         help="Use large model (2048-dim GRU) for hard stages")
     parser.add_argument("--rl_stages", type=str,   default="3,4,5",
